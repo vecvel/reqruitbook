@@ -1,0 +1,12 @@
+{{define "notification"}}{{.Title}}
+{{if .Body}}
+{{.Body}}
+{{end}}{{if .ActionURL}}
+{{.ActionLabel}}: {{.ActionURL}}
+
+You will be asked to sign in. This link carries no access of its own.
+{{end}}
+--
+You are receiving this because of activity on your {{.ProductName}} account.
+Manage which notifications reach you in your account settings.
+{{end}}

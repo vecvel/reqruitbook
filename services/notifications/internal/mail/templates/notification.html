@@ -1,0 +1,12 @@
+{{define "notification"}}
+<h1 style="margin:0 0 12px;font-size:20px;line-height:28px;font-weight:600;color:#111827;">{{.Title}}</h1>
+{{if .Body}}<p style="margin:0 0 24px;font-size:15px;line-height:24px;color:#374151;">{{.Body}}</p>{{end}}
+{{if .ActionURL}}
+<p style="margin:0 0 24px;">
+  <a href="{{.ActionURL}}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 20px;border-radius:8px;">{{.ActionLabel}}</a>
+</p>
+<p style="margin:0;font-size:13px;line-height:20px;color:#6b7280;">
+  You will be asked to sign in. This link carries no access of its own.
+</p>
+{{end}}
+{{end}}
