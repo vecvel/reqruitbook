@@ -8,15 +8,21 @@ separate administration console.
 
 ```
 apps/
-  web-company/      Company careers portal (Next.js)
+  web-company/      A company's own recruiting portal — {slug}.{host}  (Next.js)
+  web-jobs/         The candidate job portal — jobs.{host}             (Next.js)
+  web-admin/        The platform administration console — root.{host}  (Next.js)
+  web-landing/      Marketing, pricing and both sign-ups — {host}      (Next.js)
 services/
   gateway/          API gateway — host routing, tenancy, token verification (Go)
-  identity/         Accounts, sessions, roles, permissions (Go)
+  identity/         Accounts, sessions, roles, permissions, a company's team (Go)
   jobs/             Requisitions, dual visibility, custom application forms (Go)
   applications/     Pipeline, dynamic stages, one-application-per-job (Go)
   candidates/       Profiles, resumes, discoverability, talent search (Go)
   messaging/        Recruiter ↔ candidate conversations (Go)
   notifications/    In-app, SSE stream, email fan-out (Go)
+  interviews/       Rounds, panels, scorecards (Go)
+  offers/           Packages, approval, dispatch, response (Go)
+  audit/            Every platform event, per tenant and platform-wide (Go)
   companies/        Registration, profile, careers portal settings (NestJS)
   subscriptions/    Plans, subscriptions, entitlements (NestJS)
   payments/         Provider-agnostic billing, invoices, webhooks (NestJS)
@@ -25,9 +31,10 @@ services/
 packages/
   goshared/         Shared Go platform library
   nestshared/       Shared TypeScript platform library (the NestJS counterpart)
-scripts/            dev.sh (run the stack), smoke.sh (boundary tests)
-deploy/             Infrastructure and local orchestration
-docs/               Architecture, service contract, and RBAC documentation
+  ui/               Shared front-end layer: API client, access evaluator, transport
+scripts/            dev.sh (run the stack), smoke.sh + smoke-product.sh (live suites)
+deploy/             Infrastructure, service images, local orchestration
+docs/               Architecture, service contract, front ends, RBAC
 ```
 
 Both shared libraries expose the same concepts — problem+json, the gateway
@@ -35,13 +42,26 @@ principal, the permission guard, cursor pagination, the migration runner, the
 event envelope — so a service behaves the same way whichever runtime it is
 written in.
 
+**No front end holds a database.** There is no connection string in any app,
+and there is not meant to be one: a portal that could read a table could read
+another tenant's rows, and the boundary that stops that lives at the gateway.
+
 ## Getting started
 
 Requires Go 1.26+, Node 20+, pnpm, and Docker.
 
 ```bash
 make setup      # signing keys, .env, and the infrastructure containers
-make dev        # infrastructure, every service, and the web app
+make dev        # infrastructure, every service, and the company portal
+```
+
+`make dev` runs the backend and `web-company` on :3000. The other three portals
+are separate Next servers you start yourself when you need them:
+
+```bash
+pnpm --filter @reqruitbook/web-jobs dev      # :3001
+pnpm --filter @reqruitbook/web-admin dev     # :3002
+pnpm --filter @reqruitbook/web-landing dev   # :3003
 ```
 
 `make dev` discovers every service in the tree, builds it, and waits for its
@@ -69,10 +89,13 @@ Two suites run against the live stack:
 | | |
 | --- | --- |
 | `make smoke` | Security boundaries: cross-tenant tokens, header spoofing, portal isolation, credential enumeration, refresh replay |
-| `make smoke-product` | The product: post a job, publish it, apply, advance the pipeline, reject, talent discovery |
+| `make smoke-product` | The product: post a job, publish it, apply, advance the pipeline, reject, discover talent, schedule a round, file scorecards, draft an offer, read the audit trail |
 
 Migrations run automatically at service boot, so `make migrate` is only needed
-to apply them without starting anything.
+to apply them without starting anything. It depends on `make db`, which creates
+any service database a running Postgres is missing — the container's init script
+only runs on a fresh volume, so a service added later would otherwise fail to
+start with an error that says nothing about the cause.
 
 To run the services by hand instead, in separate terminals:
 
@@ -102,7 +125,14 @@ Portals are routed by hostname. For browser testing, add them to `/etc/hosts`:
 127.0.0.1  reqruitbook.local root.reqruitbook.local jobs.reqruitbook.local acme.reqruitbook.local
 ```
 
-With `curl`, a `Host:` header is enough.
+With `curl`, a `Host:` header is enough. `web-company` does not need the hosts
+entry at all: reached at `localhost:3000` its hostname carries no slug, so
+`COMPANY_SLUG` in its `.env` says which company the dev server is the portal
+for.
+
+Append the line as its own line. Adding it to the end of an existing one —
+which is what `echo ... >> /etc/hosts` does when the file has no trailing
+newline — makes the whole line a comment, and nothing resolves.
 
 ## Commands
 
@@ -114,8 +144,12 @@ With `curl`, a `Host:` header is enough.
 | `make smoke` / `make smoke-product` / `make smoke-all` | Test suites against a running stack |
 | `make infra` / `make infra-down` | Start or stop the containers |
 | `make infra-reset` | Destroy the volumes and start clean |
-| `make migrate` | Apply database migrations |
+| `make db` | Create any service database a running Postgres is missing |
+| `make migrate` | Apply migrations for every service |
 | `make build` / `make test` | Build and test the Go services |
+| `make verify` | Everything CI runs: build, vet, gofmt, tests, and the two generated-file checks |
+| `make images` | Build every service image, to prove the deployment path still works |
+| `make stack-up` / `make stack-down` / `make stack-logs` | Run the whole platform in containers |
 | `make run-gateway` / `make run-identity` | Run a single service |
 
 ## Local services
@@ -123,7 +157,11 @@ With `curl`, a `Host:` header is enough.
 | Service | Address |
 | --- | --- |
 | Gateway | http://localhost:8080 |
-| Identity | http://localhost:8081 |
+| Company portal | http://localhost:3000 |
+| Candidate portal | http://localhost:3001 |
+| Admin console | http://localhost:3002 |
+| Marketing site | http://localhost:3003 |
+| Identity | http://localhost:8081 (services run on 8081–8094) |
 | Postgres | localhost:5432 |
 | Redis | localhost:6379 |
 | NATS | localhost:4222 (monitor :8222) |
@@ -134,5 +172,6 @@ With `curl`, a `Host:` header is enough.
 ## Documentation
 
 - [Platform architecture](docs/architecture.md) — services, tenancy, request path, security
-- [Service contract](docs/contracts.md) — what every service must do to compose with the platform
+- [Service contract](docs/contracts.md) — what every service must do to compose with the platform, and the traps that cost an hour each
+- [Front ends](docs/frontends.md) — the four portals, the Host-header rule they all depend on, and what they still cannot do
 - [Feature-based RBAC](docs/rbac.md) — the permission model used by the company portal

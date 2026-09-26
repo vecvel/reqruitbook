@@ -81,11 +81,11 @@ run-identity: ## Run the identity service
 	go run ./services/identity/cmd/server
 
 .PHONY: dev
-dev: ## Start infrastructure, both Go services and the web app
+dev: ## Start infrastructure, every service, and the company portal
 	./scripts/dev.sh up
 
 .PHONY: dev-down
-dev-down: ## Stop the Go services and the web app
+dev-down: ## Stop the services and the company portal
 	./scripts/dev.sh down
 
 .PHONY: status
