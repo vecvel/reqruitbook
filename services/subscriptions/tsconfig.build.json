@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "types": ["node"],
+    // nest-cli deletes dist before each build. An incremental compile would
+    // then read its .tsbuildinfo, decide nothing changed and emit nothing — a
+    // build that reports success and produces no output.
+    "incremental": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
+}

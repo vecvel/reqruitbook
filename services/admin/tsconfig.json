@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2023"],
+    // The program includes test/ as well as src/, so the root is the service
+    // directory; tsconfig.build.json narrows it back to src for the emit.
+    "outDir": "dist",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "declaration": false,
+    "sourceMap": true,
+    "incremental": true,
+    "resolveJsonModule": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
