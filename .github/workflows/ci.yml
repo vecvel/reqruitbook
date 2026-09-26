@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A new push to the same branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+
+    services:
+      # Tests that need a database skip themselves when TEST_DATABASE_URL is
+      # unset, so these containers are what turns the tenant-isolation tests
+      # from skipped into enforced.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: reqruitbook
+          POSTGRES_PASSWORD: reqruitbook
+          POSTGRES_DB: reqruitbook_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reqruitbook -d reqruitbook_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgres://reqruitbook:reqruitbook@localhost:5432/reqruitbook_test?sslmode=disable
+      TEST_REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # One source of truth for the toolchain version: bumping go.mod bumps CI.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./services/... ./packages/...
+
+      - name: Vet
+        run: go vet ./services/... ./packages/...
+
+      - name: Gofmt
+        # gofmt -l prints the files it would rewrite; any output is a failure.
+        run: |
+          unformatted="$(gofmt -l services packages)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./services/... ./packages/... -race -count=1
+
+  node:
+    name: Node services, shared libraries and portals
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        # --frozen-lockfile so a pull request that forgot to commit a lockfile
+        # change fails here rather than silently resolving something different
+        # from what anyone reviewed.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the shared libraries
+        # Everything imports these as workspace:*, so nothing else typechecks
+        # until their dist directories exist.
+        run: pnpm --filter @reqruitbook/nestshared --filter @reqruitbook/ui build
+
+      - name: Typecheck
+        run: pnpm -r --filter './packages/**' --filter './services/**' --filter './apps/**' typecheck
+
+      - name: Build
+        # Apps too: the four portals are where a broken shared type surfaces,
+        # and a typecheck alone does not catch a Next build failure.
+        run: pnpm -r --filter './services/**' --filter './apps/**' build
+
+      - name: Test
+        run: pnpm -r --filter './packages/**' --filter './services/**' test
+
+  slugs:
+    name: Generated code is in sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reserved slugs match the Go source
+        # The TypeScript list is generated from packages/goshared/tenancy. Two
+        # hand-maintained copies would drift the first time someone adds a
+        # subdomain, and slug validation disagreeing with host routing is how a
+        # company claims a hostname the platform needs.
+        run: ./scripts/gen-reserved-slugs.sh --check
+
+  lint:
+    name: Lint (advisory)
+    runs-on: ubuntu-latest
+    # Advisory while the linter's backlog is worked through: a finding should
+    # be visible on the PR without blocking a correct change from merging.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m ./services/... ./packages/...

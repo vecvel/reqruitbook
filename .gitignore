@@ -1,16 +1,53 @@
-node_modules
-.next
-out
-build
-.DS_Store
-*.pem
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.env
-.env*.local
-.vercel
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+.next/
+dist/
+build/
+bin/
+out/
 *.tsbuildinfo
-next-env.d.ts
-/public/uploads/*
-!/public/uploads/.gitkeep
+
+# Go
+vendor/
+*.test
+*.out
+go.work.sum
+
+# Generated contracts
+packages/contracts/gen/
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local data
+deploy/data/
+uploads/
+
+# Editors & OS
+.DS_Store
+.idea/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+
+
+#ai
+.agents/
+.claude/
+
+# local dev process state
+.run/
+
+# Signing keys — the private key mints access tokens for every tenant.
+# Committing it would let anyone forge a platform super-admin token.
+deploy/keys/
+*.pem
+*.key

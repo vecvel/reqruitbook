@@ -1,12 +1,52 @@
+# Build context exclusions for repo-root builds (the Go services).
+#
+# The Go images copy only go.mod, go.sum, packages/ and services/, but the
+# context is still uploaded to the daemon before that, so anything large or
+# secret is excluded here rather than trusted to the COPY lines.
+
+# Dependencies and build output
 node_modules
+**/node_modules
 .next
+**/.next
+dist
+build
+bin
+out
+**/*.tsbuildinfo
+
+# VCS and local process state
 .git
+.github
 .gitignore
-.env*.local
+.run
+
+# Secrets. The private key mints access tokens for every tenant; it is mounted
+# at runtime, never baked into an image.
+deploy/keys
+**/*.pem
+**/*.key
 .env
-drizzle
-README.md
+.env.*
+!.env.example
+
+# Go test and coverage artifacts
+**/*.test
+**/*.out
+vendor
+
+# Editors and OS
+.DS_Store
+.idea
+.vscode
+**/*.swp
+
+# Local data and logs
+deploy/data
+uploads
+**/*.log
+
+# Not needed to compile a service
+apps
 docs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+scripts

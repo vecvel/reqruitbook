@@ -1,0 +1,17 @@
+packages:
+  - "apps/*"
+  - "packages/nestshared"
+  - "packages/ui"
+  - "services/*"
+
+# pnpm refuses install-time scripts unless they are named here. Each decision is
+# deliberate rather than a blanket allow.
+allowBuilds:
+  # protobufjs only generates optional TypeScript helpers; the OTLP exporter
+  # works without them, so there is nothing to gain from running it.
+  protobufjs: false
+  # esbuild and unrs-resolver ship platform-specific native binaries and their
+  # install scripts are what put the right one in place. Refusing these breaks
+  # the tools that depend on them (Next, drizzle-kit) at runtime, not install.
+  esbuild: true
+  unrs-resolver: true

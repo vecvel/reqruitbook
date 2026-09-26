@@ -1,119 +1,138 @@
 # ReqruitBook
-<div align="center">
 
-**The Modern Recruitment & Talent Operating System**
+A multi-tenant recruitment platform. Companies get isolated careers portals,
+candidates get one central job portal, and the platform is operated from a
+separate administration console.
 
-A full-stack, enterprise-grade Applicant Tracking System (ATS) and Recruitment Management Platform designed to streamline the entire hiring lifecycle — from requisition planning and candidate sourcing to panel interview evaluation, offer generation, and HRM onboarding synchronization.
+## Layout
 
+```
+apps/
+  web-company/      Company careers portal (Next.js)
+services/
+  gateway/          API gateway — host routing, tenancy, token verification (Go)
+  identity/         Accounts, sessions, roles, permissions (Go)
+  jobs/             Requisitions, dual visibility, custom application forms (Go)
+  applications/     Pipeline, dynamic stages, one-application-per-job (Go)
+  candidates/       Profiles, resumes, discoverability, talent search (Go)
+  messaging/        Recruiter ↔ candidate conversations (Go)
+  notifications/    In-app, SSE stream, email fan-out (Go)
+  companies/        Registration, profile, careers portal settings (NestJS)
+  subscriptions/    Plans, subscriptions, entitlements (NestJS)
+  payments/         Provider-agnostic billing, invoices, webhooks (NestJS)
+  support/          Support tickets, company and platform sides (NestJS)
+  admin/            Root console aggregation over projections (NestJS)
+packages/
+  goshared/         Shared Go platform library
+  nestshared/       Shared TypeScript platform library (the NestJS counterpart)
+scripts/            dev.sh (run the stack), smoke.sh (boundary tests)
+deploy/             Infrastructure and local orchestration
+docs/               Architecture, service contract, and RBAC documentation
+```
 
-[![Next.js](https://img.shields.io/badge/Next.js-16.3^-black?style=flat&logo=next.js)](https://nextjs.org/)
-[![React](https://img.shields.io/badge/React-19.2^-61DAFB?style=flat&logo=react)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0^-blue?style=flat&logo=typescript)](https://www.typescriptlang.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4.0^-38B2AC?style=flat&logo=tailwind-css)](https://tailwindcss.com/)
-[![Drizzle ORM](https://img.shields.io/badge/Drizzle_ORM-0.45^-C5F74F?style=flat&logo=drizzle)](https://orm.drizzle.team/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16^-336791?style=flat&logo=postgresql)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-</div>
+Both shared libraries expose the same concepts — problem+json, the gateway
+principal, the permission guard, cursor pagination, the migration runner, the
+event envelope — so a service behaves the same way whichever runtime it is
+written in.
 
+## Getting started
 
-<img width="1674" height="788" alt="Screenshot 2026-08-16 at 2 01 17 PM" src="https://github.com/user-attachments/assets/4df6e515-bd8c-4375-802a-a2be654d2901" />
-
-
----
-
-## Features
-
-- **ATS Pipeline & Kanban**: 8-stage visual recruitment pipeline with drag-and-drop workflow.
-- **Dynamic Database RBAC**: Fully customizable roles and permissions with root administrator safeguards.
-- **Requisition Management**: Complete job vacancy lifecycle with automated publishing to the careers portal.
-- **Candidate Talent Pool**: Sourcing directory, resume management, and candidate profile tracking.
-- **Interview Scheduling**: Multi-round panel interview scheduling with structured scorecards and rubrics.
-- **Offer Management & HRM Bridge**: Compensation package generation and one-click employee sync to HRM.
-- **Communications**: Automated email templates and message delivery audit history.
-- **Public Careers Portal**: Mobile-responsive job discovery and direct application portal.
-
----
-
-## Tech Stack
-
-- **Framework**: Next.js 16 (App Router, Turbopack, Server Actions)
-- **UI**: React 19, Radix UI Primitives, Lucide Icons
-- **Styling**: Tailwind CSS v4
-- **Database & ORM**: PostgreSQL (Neon Serverless) with Drizzle ORM
-- **Validation**: Zod
-
----
-
-## Getting Started
-
-### 1. Clone & Install
+Requires Go 1.26+, Node 20+, pnpm, and Docker.
 
 ```bash
-git clone https://github.com/your-org/reqruitbook.git
-cd reqruitbook
-npm install
+make setup      # signing keys, .env, and the infrastructure containers
+make dev        # infrastructure, every service, and the web app
 ```
 
-### 2. Environment Setup
+`make dev` discovers every service in the tree, builds it, and waits for its
+readiness endpoint before starting the next. Three behaviours are deliberate:
 
-Create `.env` based on `.env.example`:
+- **A service that does not compile or start is skipped, loudly, by name.** One
+  service still being written then costs you its own routes — which answer 502,
+  exactly as a deployed-but-down service would — instead of the whole platform.
+- **A port held by something `dev.sh` did not start is left alone**, and that
+  service is skipped. Killing an unknown process would be worse than not
+  starting one.
+- **`make dev-down` sweeps those ports anyway.** Stopping is explicit intent, so
+  it clears stale listeners a crash or a hand-started process left behind.
+  Without that sweep the skip above quietly leaves an *old binary* serving while
+  a fresh `make dev` reports success — a confusing way to lose an afternoon.
 
 ```bash
-cp .env.example .env
+make status        # what is running, and on which port
+make smoke-all     # both test suites against the running stack
+make dev-down      # stop the services (infrastructure keeps running)
 ```
 
-Configure your PostgreSQL database connection:
+Two suites run against the live stack:
 
-```env
-DATABASE_URL="postgresql://user:password@localhost:5432/reqruitbook"
-NEXT_PUBLIC_APP_URL="http://localhost:3000"
-SESSION_SECRET="your-secure-random-secret-key"
-```
+| | |
+| --- | --- |
+| `make smoke` | Security boundaries: cross-tenant tokens, header spoofing, portal isolation, credential enumeration, refresh replay |
+| `make smoke-product` | The product: post a job, publish it, apply, advance the pipeline, reject, talent discovery |
 
-### 3. Database Migration & Seed
+Migrations run automatically at service boot, so `make migrate` is only needed
+to apply them without starting anything.
+
+To run the services by hand instead, in separate terminals:
 
 ```bash
-npm run db:push
-npm run db:seed
+make run-identity   # :8081
+make run-gateway    # :8080
 ```
 
-### 4. Run Development Server
+### First sign-in
+
+`make setup` writes bootstrap credentials into `.env`. The identity service
+creates that administrator on first boot and logs a warning; sign in, change the
+password, then remove the `BOOTSTRAP_ADMIN_*` lines.
 
 ```bash
-npm run dev
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -H 'Host: root.reqruitbook.local' \
+  -d '{"realm":"platform","email":"admin@reqruitbook.local","password":"..."}'
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to access the platform.
+### Local hostnames
 
----
+Portals are routed by hostname. For browser testing, add them to `/etc/hosts`:
 
-## Demo Accounts
-
-All demo accounts share the password: `ReqruitBook2026!`
-
-| Role | Email | Privileges |
-| :--- | :--- | :--- |
-| **System Administrator** | `admin@myorganisation.com` | Root Administrator (Full RBAC Management) |
-| **Lead Recruiter** | `recruiter@myorganisation.com` | Requisitions, Pipeline Advancement, Offers |
-| **Hiring Manager** | `david.kim@myorganisation.com` | Engineering Requisitions, Scorecards |
-| **Interviewer** | `sarah.lopez@myorganisation.com` | Panel Evaluations & Scorecards |
-
----
-
-## Scripts
-
-```bash
-npm run dev          # Start development server
-npm run build        # Build for production
-npm run start        # Run production server
-npm run typecheck    # Run TypeScript compiler checks
-npm run db:push      # Push schema changes to database
-npm run db:seed      # Seed database with initial records
-npm run db:studio    # Open Drizzle Studio database viewer
+```
+127.0.0.1  reqruitbook.local root.reqruitbook.local jobs.reqruitbook.local acme.reqruitbook.local
 ```
 
----
+With `curl`, a `Host:` header is enough.
 
-## License
+## Commands
 
-[Proprietary License](LICENSE) · [Code of Conduct](CODE_OF_CONDUCT.md)
+| Command | Description |
+| --- | --- |
+| `make setup` | Keys, `.env`, and infrastructure |
+| `make dev` / `make dev-down` | Start or stop the whole stack |
+| `make status` | Show what is running |
+| `make smoke` / `make smoke-product` / `make smoke-all` | Test suites against a running stack |
+| `make infra` / `make infra-down` | Start or stop the containers |
+| `make infra-reset` | Destroy the volumes and start clean |
+| `make migrate` | Apply database migrations |
+| `make build` / `make test` | Build and test the Go services |
+| `make run-gateway` / `make run-identity` | Run a single service |
+
+## Local services
+
+| Service | Address |
+| --- | --- |
+| Gateway | http://localhost:8080 |
+| Identity | http://localhost:8081 |
+| Postgres | localhost:5432 |
+| Redis | localhost:6379 |
+| NATS | localhost:4222 (monitor :8222) |
+| MinIO | http://localhost:9001 |
+| Mailpit | http://localhost:8025 |
+| Jaeger | http://localhost:16686 |
+
+## Documentation
+
+- [Platform architecture](docs/architecture.md) — services, tenancy, request path, security
+- [Service contract](docs/contracts.md) — what every service must do to compose with the platform
+- [Feature-based RBAC](docs/rbac.md) — the permission model used by the company portal
