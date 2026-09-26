@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1
+
+# Generic build for any Go service in this repository.
+#
+# There is a single go.mod at the repo root, so the build context is the repo
+# root and the service is selected with a build argument. A service that follows
+# the layout in docs/contracts.md (cmd/server, optional cmd/migrate) needs no
+# Dockerfile of its own:
+#
+#   docker build -f deploy/Dockerfile.go-service \
+#     --build-arg SERVICE=jobs --build-arg PORT=8085 \
+#     -t reqruitbook/jobs:dev .
+#
+# PORT is only used for EXPOSE and the healthcheck. Each service reads its own
+# listen port from its own variable (GATEWAY_HTTP_PORT, IDENTITY_HTTP_PORT, …),
+# so whatever is passed here must agree with what the environment sets.
+#
+# services/gateway/Dockerfile and services/identity/Dockerfile are the same
+# recipe with the arguments baked in, so `docker build -f services/<x>/Dockerfile .`
+# works without remembering them.
+
+ARG GO_VERSION=1.26
+ARG ALPINE_VERSION=3.22
+
+FROM golang:${GO_VERSION}-alpine AS build
+
+WORKDIR /src
+
+# Dependencies change far less often than source, so they get their own layer.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY packages ./packages
+COPY services ./services
+
+ARG SERVICE
+
+# CGO off produces a static binary that runs on a base image without libc.
+# -trimpath keeps build machine paths out of panics; -s -w drops the symbol
+# table and DWARF, which is most of the binary size and none of its behaviour.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
+    test -n "${SERVICE}" || { echo "build arg SERVICE is required" >&2; exit 1; }; \
+    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+      -o /out/server "./services/${SERVICE}/cmd/server"; \
+    if [ -d "./services/${SERVICE}/cmd/migrate" ]; then \
+      CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+        -o /out/migrate "./services/${SERVICE}/cmd/migrate"; \
+    fi
+
+FROM alpine:${ALPINE_VERSION}
+
+# ca-certificates for outbound TLS (payment providers, object storage),
+# tzdata because scheduling and audit timestamps are rendered in local zones.
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S app && adduser -S -G app -u 10001 app
+
+COPY --from=build /out/ /usr/local/bin/
+
+ARG PORT=8080
+ENV PORT=${PORT}
+
+# Nothing in the image is writable by the runtime user, so a compromised
+# service cannot rewrite its own binary.
+USER app:app
+
+EXPOSE ${PORT}
+
+# /healthz is liveness only: it must not check Postgres or Redis, or a brief
+# dependency blip would have the orchestrator kill an otherwise healthy process.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=5 \
+  CMD wget --quiet --spider "http://127.0.0.1:${PORT}/healthz" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/server"]

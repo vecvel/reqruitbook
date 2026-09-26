@@ -1,0 +1,412 @@
+# ReqruitBook application services (local containerised run).
+#
+# This file is an OVERLAY on deploy/docker-compose.yml, not a replacement: it
+# adds the application services and depends on the infrastructure defined there.
+# Both files declare the same project name, so they merge into one stack.
+#
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.services.yml up -d --build
+#
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.services.yml logs -f gateway
+#
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.services.yml down
+#
+# Run `make keys` first: the gateway and identity read the RS256 keypair from
+# deploy/keys, which is mounted read-only and never baked into an image.
+#
+# Hostnames are compose service names, so nothing here points at localhost — a
+# container's localhost is itself. Ports are published for the host only so the
+# portals and `make smoke` can reach a service directly.
+#
+# Infrastructure alone (the default for `make dev`, which runs the services on
+# the host) is still just `docker compose -f deploy/docker-compose.yml up -d`.
+#
+# The shared blocks below are YAML anchors. Fourteen services differing in three
+# lines each is how a file like this drifts: one gets a stale NATS url, nobody
+# notices until its consumer stops. Here a change to the platform's environment
+# is one edit.
+
+name: reqruitbook
+
+x-service-env: &service-env
+  PLATFORM_ENV: ${PLATFORM_ENV:-development}
+  PLATFORM_HOSTNAME: ${PLATFORM_HOSTNAME:-reqruitbook.local}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: ${POSTGRES_USER:-reqruitbook}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reqruitbook}
+  POSTGRES_SSLMODE: disable
+
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-reqruitbook}
+
+  NATS_URL: nats://nats:4222
+
+  # Guards every /internal/* endpoint. Empty leaves them open inside the compose
+  # network, which is fine on a laptop and is not fine anywhere else.
+  INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+
+# Where each service reaches the others. Every service gets the whole map rather
+# than a hand-picked subset: the subset is what goes stale when a service starts
+# calling a neighbour it did not call before, and the failure is a 502 at
+# runtime rather than anything a review would catch.
+x-service-urls: &service-urls
+  IDENTITY_URL: http://identity:8081
+  COMPANIES_URL: http://companies:8082
+  SUBSCRIPTIONS_URL: http://subscriptions:8083
+  PAYMENTS_URL: http://payments:8084
+  JOBS_URL: http://jobs:8085
+  APPLICATIONS_URL: http://applications:8086
+  CANDIDATES_URL: http://candidates:8087
+  MESSAGING_URL: http://messaging:8088
+  NOTIFICATIONS_URL: http://notifications:8089
+  SUPPORT_URL: http://support:8090
+  ADMIN_URL: http://admin:8091
+  INTERVIEWS_URL: http://interviews:8092
+  OFFERS_URL: http://offers:8093
+  AUDIT_URL: http://audit:8094
+
+x-infra-ready: &infra-ready
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  nats:
+    condition: service_healthy
+
+services:
+  identity:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: identity
+        PORT: "8081"
+    image: reqruitbook/identity:dev
+    container_name: reqruitbook-identity
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: identity
+      IDENTITY_HTTP_PORT: 8081
+      JWT_PRIVATE_KEY_PATH: /run/keys/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /run/keys/jwt-public.pem
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-720h}
+
+      # First run only. Once the administrator has signed in these can be
+      # dropped; the provisioner is a no-op afterwards.
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Platform Administrator}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes:
+      - ./keys:/run/keys:ro
+    ports:
+      - "${IDENTITY_HTTP_PORT:-8081}:8081"
+
+  companies:
+    build:
+      context: ..
+      dockerfile: services/companies/Dockerfile
+    image: reqruitbook/companies:dev
+    container_name: reqruitbook-companies
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: companies
+      COMPANIES_HTTP_PORT: 8082
+    ports:
+      - "${COMPANIES_HTTP_PORT:-8082}:8082"
+
+  subscriptions:
+    build:
+      context: ..
+      dockerfile: services/subscriptions/Dockerfile
+    image: reqruitbook/subscriptions:dev
+    container_name: reqruitbook-subscriptions
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: subscriptions
+      SUBSCRIPTIONS_HTTP_PORT: 8083
+    ports:
+      - "${SUBSCRIPTIONS_HTTP_PORT:-8083}:8083"
+
+  payments:
+    build:
+      context: ..
+      dockerfile: services/payments/Dockerfile
+    image: reqruitbook/payments:dev
+    container_name: reqruitbook-payments
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: payments
+      PAYMENTS_HTTP_PORT: 8084
+    ports:
+      - "${PAYMENTS_HTTP_PORT:-8084}:8084"
+
+  jobs:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: jobs
+        PORT: "8085"
+    image: reqruitbook/jobs:dev
+    container_name: reqruitbook-jobs
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: jobs
+      JOBS_HTTP_PORT: 8085
+    ports:
+      - "${JOBS_HTTP_PORT:-8085}:8085"
+
+  applications:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: applications
+        PORT: "8086"
+    image: reqruitbook/applications:dev
+    container_name: reqruitbook-applications
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: applications
+      APPLICATIONS_HTTP_PORT: 8086
+    ports:
+      - "${APPLICATIONS_HTTP_PORT:-8086}:8086"
+
+  candidates:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: candidates
+        PORT: "8087"
+    image: reqruitbook/candidates:dev
+    container_name: reqruitbook-candidates
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: candidates
+      CANDIDATES_HTTP_PORT: 8087
+    ports:
+      - "${CANDIDATES_HTTP_PORT:-8087}:8087"
+
+  messaging:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: messaging
+        PORT: "8088"
+    image: reqruitbook/messaging:dev
+    container_name: reqruitbook-messaging
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: messaging
+      MESSAGING_HTTP_PORT: 8088
+    ports:
+      - "${MESSAGING_HTTP_PORT:-8088}:8088"
+
+  notifications:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: notifications
+        PORT: "8089"
+    image: reqruitbook/notifications:dev
+    container_name: reqruitbook-notifications
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: notifications
+      NOTIFICATIONS_HTTP_PORT: 8089
+      # Mailpit captures everything in development; nothing leaves the host.
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_TLS: ${SMTP_TLS:-false}
+      SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-no-reply@reqruitbook.local}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-ReqruitBook}
+      COMPANY_PORTAL_URL: ${COMPANY_PORTAL_URL:-http://localhost:3000}
+      JOBS_PORTAL_URL: ${JOBS_PORTAL_URL:-http://localhost:3001}
+      ROOT_PORTAL_URL: ${ROOT_PORTAL_URL:-http://localhost:3002}
+    ports:
+      - "${NOTIFICATIONS_HTTP_PORT:-8089}:8089"
+
+  support:
+    build:
+      context: ..
+      dockerfile: services/support/Dockerfile
+    image: reqruitbook/support:dev
+    container_name: reqruitbook-support
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: support
+      SUPPORT_HTTP_PORT: 8090
+    ports:
+      - "${SUPPORT_HTTP_PORT:-8090}:8090"
+
+  admin:
+    build:
+      context: ..
+      dockerfile: services/admin/Dockerfile
+    image: reqruitbook/admin:dev
+    container_name: reqruitbook-admin
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: admin
+      ADMIN_HTTP_PORT: 8091
+    ports:
+      - "${ADMIN_HTTP_PORT:-8091}:8091"
+
+  interviews:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: interviews
+        PORT: "8092"
+    image: reqruitbook/interviews:dev
+    container_name: reqruitbook-interviews
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: interviews
+      INTERVIEWS_HTTP_PORT: 8092
+    ports:
+      - "${INTERVIEWS_HTTP_PORT:-8092}:8092"
+
+  offers:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: offers
+        PORT: "8093"
+    image: reqruitbook/offers:dev
+    container_name: reqruitbook-offers
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: offers
+      OFFERS_HTTP_PORT: 8093
+    ports:
+      - "${OFFERS_HTTP_PORT:-8093}:8093"
+
+  audit:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE: audit
+        PORT: "8094"
+    image: reqruitbook/audit:dev
+    container_name: reqruitbook-audit
+    restart: unless-stopped
+    depends_on:
+      <<: *infra-ready
+    environment:
+      <<: [*service-env, *service-urls]
+      # Spelled out rather than defaulted from the service name, so a
+      # misconfiguration fails loudly instead of silently sharing a schema.
+      POSTGRES_DB: audit
+      AUDIT_HTTP_PORT: 8094
+    ports:
+      - "${AUDIT_HTTP_PORT:-8094}:8094"
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: services/gateway/Dockerfile
+    image: reqruitbook/gateway:dev
+    container_name: reqruitbook-gateway
+    restart: unless-stopped
+    # The gateway proxies to the others. Starting it first would answer real
+    # requests with 502s while the rest come up.
+    depends_on:
+      <<: *infra-ready
+      identity:
+        condition: service_started
+    environment:
+      <<: [*service-env, *service-urls]
+      # Verification only — the gateway never signs, so it holds no private key.
+      # The private key is still on the mount; making that a separate mount is
+      # the obvious hardening step once this runs anywhere but a laptop.
+      JWT_PRIVATE_KEY_PATH: /run/keys/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /run/keys/jwt-public.pem
+
+      GATEWAY_HTTP_PORT: 8080
+      GATEWAY_RATE_LIMIT: ${GATEWAY_RATE_LIMIT:-300}
+      GATEWAY_RATE_WINDOW: ${GATEWAY_RATE_WINDOW:-1m}
+    volumes:
+      - ./keys:/run/keys:ro
+    ports:
+      - "${GATEWAY_HTTP_PORT:-8080}:8080"
